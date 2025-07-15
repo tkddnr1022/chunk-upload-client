@@ -15,7 +15,7 @@ function App() {
   const [file, setFile] = useState(null);
 
   // 청크 업로드 관련 상태
-  const [chunkSize, setChunkSize] = useState(1024 * 1024 * 2); // 2MB 기본값
+  const [chunkSize, setChunkSize] = useState(1024 * 1024 * 10); // 10MB 기본값
   const [chunkProgress, setChunkProgress] = useState(0);
   const [chunkUploading, setChunkUploading] = useState(false);
   const [chunkUploadTime, setChunkUploadTime] = useState(null);
