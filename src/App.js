@@ -269,7 +269,7 @@ function App() {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              ...getCustomHeaders(),
+              ...getCustomHeaders({ 'x-chunk-total': totalChunks }),
             },
             body: JSON.stringify({
               fileId,
