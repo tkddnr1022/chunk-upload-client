@@ -79,12 +79,28 @@ function App() {
     const savedChunk = localStorage.getItem('uploadTestChunkSize');
     const savedParallel = localStorage.getItem('uploadTestParallelCount');
     const savedJwtToken = localStorage.getItem('uploadTestJwtToken');
+    const savedCustomFields = localStorage.getItem('uploadTestCustomFields');
+    const savedCustomHeaders = localStorage.getItem('uploadTestCustomHeaders');
     if (savedOrigin) setApiOrigin(savedOrigin);
     if (savedCount) setTestCount(Number(savedCount));
     if (savedChunk) setChunkSize(Number(savedChunk));
     if (savedParallel) setParallelCount(Number(savedParallel));
     if (savedJwtToken) setJwtToken(savedJwtToken);
+    if (savedCustomFields) {
+      try { setCustomFields(JSON.parse(savedCustomFields)); } catch {}
+    }
+    if (savedCustomHeaders) {
+      try { setCustomHeaders(JSON.parse(savedCustomHeaders)); } catch {}
+    }
   }, []);
+
+  // customFields, customHeaders 변경 시 localStorage에 저장
+  useEffect(() => {
+    localStorage.setItem('uploadTestCustomFields', JSON.stringify(customFields));
+  }, [customFields]);
+  useEffect(() => {
+    localStorage.setItem('uploadTestCustomHeaders', JSON.stringify(customHeaders));
+  }, [customHeaders]);
 
   // 기록 불러오기
   useEffect(() => {
