@@ -148,9 +148,9 @@ function App() {
       const end = Math.min(file.size, start + chunkSize);
       const chunk = file.slice(start, end);
       const formData = new FormData();
+      customFields.forEach(f => { if (f.key) formData.append(f.key, f.value); });
       // 파일만 기본 필드로 추가
       formData.append('file', chunk);
-      customFields.forEach(f => { if (f.key) formData.append(f.key, f.value); });
       if (i === 0) chunkStart = performance.now();
       try {
         const res = await fetch(uploadChunkUrl, {
