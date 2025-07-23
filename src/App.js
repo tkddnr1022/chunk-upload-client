@@ -17,7 +17,7 @@ function App() {
   const [chunkFile, setChunkFile] = useState(null);
 
   // 청크 업로드 관련 상태
-  const [chunkSize, setChunkSize] = useState(1024 * 1024 * 10); // 10MB 기본값
+  const [chunkSize, setChunkSize] = useState(10); // 10MB 기본값 (MB 단위)
   const [chunkProgress, setChunkProgress] = useState(0);
   const [chunkTestProgresses, setChunkTestProgresses] = useState([]);
   const [chunkUploading, setChunkUploading] = useState(false);
@@ -218,8 +218,9 @@ function App() {
 
     const uploadOne = async (i) => {
       if (aborted) return;
-      const start = i * chunkSize;
-      const end = Math.min(file.size, start + chunkSize);
+      const chunkSizeInBytes = chunkSize * 1024 * 1024; // MB를 byte로 변환
+      const start = i * chunkSizeInBytes;
+      const end = Math.min(file.size, start + chunkSizeInBytes);
       const chunk = file.slice(start, end);
       const formData = new FormData();
       customFields.forEach(f => { if (f.key) formData.append(f.key, f.value); });
@@ -522,7 +523,8 @@ function App() {
         // 발급받은 Request ID 사용
         const requestId = requestIds[t];
         
-        const totalChunks = Math.ceil(chunkFile.size / chunkSize);
+        const chunkSizeInBytes = chunkSize * 1024 * 1024; // MB를 byte로 변환
+        const totalChunks = Math.ceil(chunkFile.size / chunkSizeInBytes);
         const fileId = `${chunkFile.name}-${chunkFile.size}-${chunkFile.lastModified}-${Date.now()}-${t}`;
         const uploadChunkUrl = apiOrigin.replace(/\/$/, '') + uploadChunkPath;
         const mergeChunksUrl = apiOrigin.replace(/\/$/, '') + mergeChunksPath;
@@ -531,7 +533,7 @@ function App() {
         let mergeOk = false;
         const { chunkStart, chunkEnd, success: chunkUploadSuccess } = await parallelChunkUpload({ 
           file: chunkFile, 
-          chunkSize, 
+          chunkSize: chunkSizeInBytes, 
           fileId, 
           totalChunks, 
           uploadChunkUrl, 
@@ -624,7 +626,7 @@ function App() {
       avgSingleSpeed: singleTimes.length ? Math.round(singleFile.size / (singleTimes.reduce((a, b) => a + b, 0) / singleTimes.length) * 1000) : null, // bytes/sec
       avgChunkSpeed: chunkTimes.length ? Math.round(chunkFile.size / (chunkTimes.reduce((a, b) => a + b, 0) / chunkTimes.length) * 1000) : null, // bytes/sec
       requestIds: requestIds,
-      chunkSize,
+      chunkSize: chunkSize * 1024 * 1024, // MB를 byte로 변환하여 저장
       singleFileName: singleFile?.name || '-',
       chunkFileName: chunkFile?.name || '-',
       singleFileSize: singleFile?.size || 0,
@@ -742,13 +744,14 @@ function App() {
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '5/7', gridRow: '1/2' }}>
-              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>청크 크기 (byte)</span>
+              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>청크 크기 (MB)</span>
               <input
                 type="number"
                 value={chunkSize}
                 onChange={handleChunkSizeChange}
-                min={1024}
-                step={1024}
+                min={1}
+                max={1000}
+                step={1}
                 style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, transition: 'border 0.2s', outline: 'none', boxSizing: 'border-box' }}
                 onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
