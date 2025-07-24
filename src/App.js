@@ -24,6 +24,14 @@ function App() {
   const [chunkUploadTime, setChunkUploadTime] = useState(null);
   const [chunkResult, setChunkResult] = useState('');
 
+  // 네트워크 속도 계산을 위한 상태
+  const [uploadStartTime, setUploadStartTime] = useState(null);
+  const [chunkUploadStartTime, setChunkUploadStartTime] = useState(null);
+  const [currentSpeed, setCurrentSpeed] = useState(0);
+  const [chunkCurrentSpeed, setChunkCurrentSpeed] = useState(0);
+  const [totalUploadedBytes, setTotalUploadedBytes] = useState(0);
+  const [totalChunkUploadedBytes, setTotalChunkUploadedBytes] = useState(0);
+
   // 일괄 측정 상태
   const [batchRunning, setBatchRunning] = useState(false);
   const [history, setHistory] = useState([]);
@@ -197,8 +205,34 @@ function App() {
 
   // 청크 크기 변경 핸들러
   const handleChunkSizeChange = (e) => {
-    setChunkSize(Number(e.target.value));
+    const newChunkSize = Number(e.target.value);
+    setChunkSize(newChunkSize);
     localStorage.setItem('uploadTestChunkSize', e.target.value);
+    
+    // 디버깅: 청크 크기 변경 로그
+    console.log(`[DEBUG] 청크 크기 변경: ${newChunkSize} MB = ${(newChunkSize * 1024 * 1024).toLocaleString()} bytes`);
+  };
+
+  // 청크 크기 변환 유틸리티 함수
+  const convertMBToBytes = (mb) => mb * 1024 * 1024;
+  const convertBytesToMB = (bytes) => (bytes / (1024 * 1024)).toFixed(2);
+
+  // 네트워크 속도 계산 함수
+  const calculateSpeed = (bytes, startTime) => {
+    if (!startTime || bytes === 0) return 0;
+    const elapsed = (Date.now() - startTime) / 1000; // 초 단위
+    return elapsed > 0 ? bytes / elapsed : 0;
+  };
+
+  const formatSpeed = (bytesPerSec) => {
+    if (bytesPerSec === 0) return '-';
+    if (bytesPerSec >= 1024 * 1024) {
+      return `${(bytesPerSec / (1024 * 1024)).toFixed(2)} MB/s`;
+    } else if (bytesPerSec >= 1024) {
+      return `${(bytesPerSec / 1024).toFixed(2)} KB/s`;
+    } else {
+      return `${bytesPerSec.toFixed(0)} B/s`;
+    }
   };
 
   // 병렬 청크 업로드 개수 변경 핸들러
@@ -208,7 +242,7 @@ function App() {
   };
 
   // 병렬 청크 업로드 함수
-  async function parallelChunkUpload({ file, chunkSize, fileId, totalChunks, uploadChunkUrl, setChunkProgress, parallelCount, abortController, getHeadersWithRequestId, requestId, testIndex }) {
+  async function parallelChunkUpload({ file, chunkSizeInBytes, fileId, totalChunks, uploadChunkUrl, setChunkProgress, parallelCount, abortController, getHeadersWithRequestId, requestId, testIndex }) {
     let uploadedChunks = 0;
     let chunkStart = 0, chunkEnd = 0;
     const chunkStatus = Array(totalChunks).fill(false);
@@ -216,12 +250,18 @@ function App() {
     let aborted = false;
     let errorMessage = '';
 
+    // 디버깅: 청크 크기 정보 출력
+    console.log(`[DEBUG] 청크 업로드 시작 - 파일 크기: ${file.size} bytes, 청크 크기: ${chunkSizeInBytes} bytes, 총 청크 수: ${totalChunks}`);
+
     const uploadOne = async (i) => {
       if (aborted) return;
-      const chunkSizeInBytes = chunkSize * 1024 * 1024; // MB를 byte로 변환
       const start = i * chunkSizeInBytes;
       const end = Math.min(file.size, start + chunkSizeInBytes);
       const chunk = file.slice(start, end);
+      
+      // 디버깅: 각 청크의 크기 정보 출력
+      //console.log(`[DEBUG] 청크 ${i} - 시작: ${start}, 끝: ${end}, 크기: ${chunk.size} bytes`);
+      
       const formData = new FormData();
       customFields.forEach(f => { if (f.key) formData.append(f.key, f.value); });
       // 파일만 기본 필드로 추가
@@ -259,24 +299,36 @@ function App() {
           newProgresses[testIndex] = chunkPercent;
           const avgProgress = Math.round(newProgresses.reduce((sum, p) => sum + p, 0) / newProgresses.length);
           setChunkProgress(avgProgress);
+          
+          // 실시간 속도 계산 - 실제 업로드된 청크 바이트 기반
+          if (chunkFile && chunkUploadStartTime) {
+            const chunkSizeInBytes = convertMBToBytes(chunkSize);
+            setTotalChunkUploadedBytes(prev => {
+              const newTotal = prev + chunkSizeInBytes;
+              const speed = calculateSpeed(newTotal, chunkUploadStartTime);
+              setChunkCurrentSpeed(speed);
+              return newTotal;
+            });
+          }
+          
           return newProgresses;
         });
-              } catch (err) {
-          if (err.name === 'AbortError') {
-            aborted = true;
-            errorMessage = '업로드가 중단되었습니다.';
-            abortControllers.forEach(ctrl => ctrl.abort());
-          } else if (!aborted) {
-            aborted = true;
-            errorMessage = err.message || `청크 ${i} 업로드 실패`;
-            abortControllers.forEach(ctrl => ctrl.abort());
-            // 에러 발생 시 전체 업로드 중단
-            if (abortController) {
-              abortController.abort();
-            }
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          aborted = true;
+          errorMessage = '업로드가 중단되었습니다.';
+          abortControllers.forEach(ctrl => ctrl.abort());
+        } else if (!aborted) {
+          aborted = true;
+          errorMessage = err.message || `청크 ${i} 업로드 실패`;
+          abortControllers.forEach(ctrl => ctrl.abort());
+          // 에러 발생 시 전체 업로드 중단
+          if (abortController) {
+            abortController.abort();
           }
-          throw err;
         }
+        throw err;
+      }
     };
     // 병렬 업로드 컨트롤
     let next = 0;
@@ -313,19 +365,32 @@ function App() {
   // 일괄 측정 핸들러
   const handleBatchTest = async (e) => {
     e.preventDefault();
+    
     setBatchRunning(true);
     setResult('');
     setErrorMessage('');
     setUploadTime(null);
-    setUploading(true);
     setChunkResult('');
     setChunkUploadTime(null);
-    setChunkUploading(true);
     setProgress(0);
     setChunkProgress(0);
+    setCurrentSpeed(0);
+    setChunkCurrentSpeed(0);
+    setTotalUploadedBytes(0);
+    setTotalChunkUploadedBytes(0);
     // 각 테스트별 프로그레스 바 초기화
     setTestProgresses(Array(testCount).fill(0));
     setChunkTestProgresses(Array(testCount).fill(0));
+    
+    // 파일 선택 여부에 따라 업로드 상태 설정
+    if (singleFile) {
+      setUploading(true);
+      setUploadStartTime(Date.now());
+    }
+    if (chunkFile) {
+      setChunkUploading(true);
+      setChunkUploadStartTime(Date.now());
+    }
     
     // AbortController 초기화
     abortControllerRef.current = new AbortController();
@@ -431,15 +496,28 @@ function App() {
               const percent = Math.round((event.loaded / event.total) * 100);
               setTestProgresses(prev => {
                 const newProgresses = [...prev];
-                newProgresses[i] = percent;
-                return newProgresses;
-              });
-              // 전체 평균 프로그레스도 업데이트
-              setTestProgresses(prev => {
-                const newProgresses = [...prev];
+                const previousProgress = newProgresses[i] || 0;
                 newProgresses[i] = percent;
                 const avgProgress = Math.round(newProgresses.reduce((sum, p) => sum + p, 0) / newProgresses.length);
                 setProgress(avgProgress);
+                
+                // 실시간 속도 계산 - 실제 업로드된 바이트 기반
+                if (singleFile && uploadStartTime) {
+                  // 현재 테스트에서 새로 업로드된 바이트만 계산
+                  const previousUploaded = (singleFile.size * previousProgress) / 100;
+                  const currentUploaded = (singleFile.size * percent) / 100;
+                  const newBytes = currentUploaded - previousUploaded;
+                  
+                  if (newBytes > 0) {
+                    setTotalUploadedBytes(prev => {
+                      const newTotal = prev + newBytes;
+                      const speed = calculateSpeed(newTotal, uploadStartTime);
+                      setCurrentSpeed(speed);
+                      return newTotal;
+                    });
+                  }
+                }
+                
                 return newProgresses;
               });
             }
@@ -523,17 +601,20 @@ function App() {
         // 발급받은 Request ID 사용
         const requestId = requestIds[t];
         
-        const chunkSizeInBytes = chunkSize * 1024 * 1024; // MB를 byte로 변환
+        const chunkSizeInBytes = convertMBToBytes(chunkSize); // MB를 byte로 변환
         const totalChunks = Math.ceil(chunkFile.size / chunkSizeInBytes);
         const fileId = `${chunkFile.name}-${chunkFile.size}-${chunkFile.lastModified}-${Date.now()}-${t}`;
         const uploadChunkUrl = apiOrigin.replace(/\/$/, '') + uploadChunkPath;
         const mergeChunksUrl = apiOrigin.replace(/\/$/, '') + mergeChunksPath;
         
+        // 디버깅: 청크 설정 정보 출력
+        console.log(`[DEBUG] 테스트 ${t + 1} - 설정된 청크 크기: ${chunkSize} MB (${chunkSizeInBytes.toLocaleString()} bytes), 파일 크기: ${chunkFile.size.toLocaleString()} bytes, 예상 청크 수: ${totalChunks}`);
+        
         // 병렬 업로드 실행
         let mergeOk = false;
         const { chunkStart, chunkEnd, success: chunkUploadSuccess } = await parallelChunkUpload({ 
           file: chunkFile, 
-          chunkSize: chunkSizeInBytes, 
+          chunkSizeInBytes: chunkSizeInBytes, 
           fileId, 
           totalChunks, 
           uploadChunkUrl, 
@@ -626,7 +707,7 @@ function App() {
       avgSingleSpeed: singleTimes.length ? Math.round(singleFile.size / (singleTimes.reduce((a, b) => a + b, 0) / singleTimes.length) * 1000) : null, // bytes/sec
       avgChunkSpeed: chunkTimes.length ? Math.round(chunkFile.size / (chunkTimes.reduce((a, b) => a + b, 0) / chunkTimes.length) * 1000) : null, // bytes/sec
       requestIds: requestIds,
-      chunkSize: chunkSize * 1024 * 1024, // MB를 byte로 변환하여 저장
+      chunkSize: convertMBToBytes(chunkSize), // MB를 byte로 변환하여 저장
       singleFileName: singleFile?.name || '-',
       chunkFileName: chunkFile?.name || '-',
       singleFileSize: singleFile?.size || 0,
@@ -727,6 +808,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                총 {testCount}회 측정 실행
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '3/5', gridRow: '1/2' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>병렬 업로드 개수</span>
@@ -742,6 +826,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                최대 {parallelCount}개 동시 업로드
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '5/7', gridRow: '1/2' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>청크 크기 (MB)</span>
@@ -757,6 +844,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                = {convertMBToBytes(chunkSize).toLocaleString()} bytes
+              </span>
             </div>
             {/* 2행: API 서버 Origin, 단일 업로드 Path, 청크 업로드 Path */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '1/3', gridRow: '2/3' }}>
@@ -771,6 +861,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {apiOrigin ? '서버 주소가 설정됨' : '테스트 대상 서버 주소'}
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '3/5', gridRow: '2/3' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>단일 업로드 Path</span>
@@ -784,6 +877,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                Instruction 업로드 엔드포인트
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '5/7', gridRow: '2/3' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>청크 업로드 Path</span>
@@ -797,6 +893,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                청크 단위 업로드 엔드포인트
+              </span>
             </div>
             {/* 3행: JWT 토큰, 청크 병합 Path, Request ID */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '1/3', gridRow: '3/4' }}>
@@ -810,6 +909,9 @@ function App() {
                 onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {jwtToken ? 'Bearer 토큰 설정됨' : '인증 토큰 (선택사항)'}
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '3/5', gridRow: '3/4' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>청크 병합 Path</span>
@@ -823,6 +925,9 @@ function App() {
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
                 required
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                청크 병합 요청 엔드포인트
+              </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '5/7', gridRow: '3/4' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Request ID 발급 Path</span>
@@ -835,6 +940,9 @@ function App() {
                 onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
               />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {requestIdPath ? 'Request ID 발급 활성화' : '요청 추적 ID (선택사항)'}
+              </span>
             </div>
             {/* 4행: Request ID Body 입력 필드 (전체 span) */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/7', gridRow: '4/5' }}>
@@ -885,8 +993,20 @@ function App() {
               </div>
             </div>
             {/* 5행: Instruction 업로드 파일 (3 span) */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gridColumn: '1/4', gridRow: '5/6', border: '2px solid #e0e0e0', borderRadius: 12, padding: '20px', backgroundColor: '#fafafa' }}>
-              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: '#333', textAlign: 'center' }}>Instruction 업로드 파일</span>
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column', 
+              alignItems: 'center', 
+              gridColumn: '1/4', 
+              gridRow: '5/6', 
+              border: singleFile ? '2px solid #1976d2' : '2px solid #e0e0e0', 
+              borderRadius: 12, 
+              padding: '20px', 
+              backgroundColor: singleFile ? '#f0f8ff' : '#fafafa',
+              minHeight: 120,
+              transition: 'border-color 0.2s, background-color 0.2s'
+            }}>
+              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: singleFile ? '#1976d2' : '#333', textAlign: 'center' }}>Instruction 업로드 파일</span>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%' }}>
                 <input
                   ref={fileInputRef}
@@ -901,7 +1021,7 @@ function App() {
                   style={{
                     padding: '12px 24px',
                     borderRadius: 8,
-                    background: '#1976d2',
+                    background: singleFile ? '#388e3c' : '#1976d2',
                     color: '#fff',
                     border: 'none',
                     fontWeight: 600,
@@ -914,20 +1034,34 @@ function App() {
                     transition: 'background 0.2s',
                     flexShrink: 0,
                   }}
-                  onMouseOver={e => e.target.style.background = '#1565c0'}
-                  onMouseOut={e => e.target.style.background = '#1976d2'}
+                  onMouseOver={e => e.target.style.background = singleFile ? '#2e7d32' : '#1565c0'}
+                  onMouseOut={e => e.target.style.background = singleFile ? '#388e3c' : '#1976d2'}
                 >
                   <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path fill="#fff" d="M16.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z"/><path stroke="#fff" strokeWidth="1.5" d="M12 16.5V19m-7 1.5h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1.28a2 2 0 0 1-1.42-.59l-2.43-2.43a2 2 0 0 0-1.42-.58h-2.72a2 2 0 0 0-1.42.58l-2.43 2.43A2 2 0 0 1 4.28 9H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2Z"/></svg>
-                  파일 선택
+                  {singleFile ? '파일 변경' : '파일 선택'}
                 </button>
-                {singleFile && (
-                  <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{singleFile.name}</span>
-                )}
+                <div style={{ minHeight: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {singleFile && (
+                    <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{singleFile.name}</span>
+                  )}
+                </div>
               </div>
             </div>
             {/* 5행: 청크 업로드 파일 (3 span) */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gridColumn: '4/7', gridRow: '5/6', border: '2px solid #e0e0e0', borderRadius: 12, padding: '20px', backgroundColor: '#fafafa' }}>
-              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: '#333', textAlign: 'center' }}>청크 업로드 파일</span>
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column', 
+              alignItems: 'center', 
+              gridColumn: '4/7', 
+              gridRow: '5/6', 
+              border: chunkFile ? '2px solid #1976d2' : '2px solid #e0e0e0', 
+              borderRadius: 12, 
+              padding: '20px', 
+              backgroundColor: chunkFile ? '#f0f8ff' : '#fafafa',
+              minHeight: 120,
+              transition: 'border-color 0.2s, background-color 0.2s'
+            }}>
+              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: chunkFile ? '#1976d2' : '#333', textAlign: 'center' }}>청크 업로드 파일</span>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%' }}>
                 <input
                   type="file"
@@ -941,7 +1075,7 @@ function App() {
                   style={{
                     padding: '12px 24px',
                     borderRadius: 8,
-                    background: '#1976d2',
+                    background: chunkFile ? '#388e3c' : '#1976d2',
                     color: '#fff',
                     border: 'none',
                     fontWeight: 600,
@@ -954,15 +1088,17 @@ function App() {
                     transition: 'background 0.2s',
                     flexShrink: 0,
                   }}
-                  onMouseOver={e => e.target.style.background = '#1565c0'}
-                  onMouseOut={e => e.target.style.background = '#1976d2'}
+                  onMouseOver={e => e.target.style.background = chunkFile ? '#2e7d32' : '#1565c0'}
+                  onMouseOut={e => e.target.style.background = chunkFile ? '#388e3c' : '#1976d2'}
                 >
                   <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path fill="#fff" d="M16.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z"/><path stroke="#fff" strokeWidth="1.5" d="M12 16.5V19m-7 1.5h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1.28a2 2 0 0 1-1.42-.59l-2.43-2.43a2 2 0 0 0-1.42-.58h-2.72a2 2 0 0 0-1.42.58l-2.43 2.43A2 2 0 0 1 4.28 9H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2Z"/></svg>
-                  파일 선택
+                  {chunkFile ? '파일 변경' : '파일 선택'}
                 </button>
-                {chunkFile && (
-                  <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{chunkFile.name}</span>
-                )}
+                <div style={{ minHeight: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {chunkFile && (
+                    <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{chunkFile.name}</span>
+                  )}
+                </div>
               </div>
             </div>
             {/* 6행: 커스텀 FormData 필드 (3 span) */}
@@ -1053,24 +1189,39 @@ function App() {
             <div style={{ gridColumn: '1/3', gridRow: '7/8', display: 'flex', alignItems: 'end' }}>
               <button
                 onClick={handleBatchTest}
-                disabled={batchRunning || (!singleFile && !chunkFile) || !apiOrigin}
+                disabled={batchRunning || !singleFile || !chunkFile || !apiOrigin}
                 style={{
                   padding: '14px 24px',
                   fontWeight: 600,
                   fontSize: 15,
                   borderRadius: 8,
-                  background: batchRunning ? '#bdbdbd' : '#1976d2',
+                  background: batchRunning ? '#bdbdbd' : !singleFile || !chunkFile || !apiOrigin ? '#e0e0e0' : '#1976d2',
                   color: '#fff',
                   border: 'none',
-                  boxShadow: batchRunning ? 'none' : '0 2px 8px 0 rgba(25,118,210,0.08)',
-                  cursor: batchRunning ? 'not-allowed' : 'pointer',
+                  boxShadow: batchRunning || !singleFile || !chunkFile || !apiOrigin ? 'none' : '0 2px 8px 0 rgba(25,118,210,0.08)',
+                  cursor: batchRunning || !singleFile || !chunkFile || !apiOrigin ? 'not-allowed' : 'pointer',
                   transition: 'background 0.2s, box-shadow 0.2s',
                   width: '100%',
                   minWidth: 120,
                   marginLeft: 0,
                 }}
-                onMouseOver={e => { if (!batchRunning) e.target.style.background = '#1565c0'; }}
-                onMouseOut={e => { if (!batchRunning) e.target.style.background = '#1976d2'; }}
+                onMouseOver={e => { 
+                  if (!batchRunning && singleFile && chunkFile && apiOrigin) {
+                    e.target.style.background = '#1565c0';
+                  }
+                }}
+                onMouseOut={e => { 
+                  if (!batchRunning && singleFile && chunkFile && apiOrigin) {
+                    e.target.style.background = '#1976d2';
+                  }
+                }}
+                title={
+                  !apiOrigin ? 'API 서버 Origin을 입력해주세요.' :
+                  !singleFile ? 'Instruction 업로드 파일을 선택해주세요.' :
+                  !chunkFile ? '청크 업로드 파일을 선택해주세요.' :
+                  batchRunning ? '측정이 진행 중입니다.' :
+                  '측정을 시작합니다.'
+                }
               >
                 {batchRunning ? '측정 중...' : '측정 시작'}
               </button>
@@ -1206,6 +1357,48 @@ function App() {
         <div style={{ marginTop: 24 }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#1976d2', marginBottom: 8 }}>Instruction 업로드 진행률</div>
+            
+            {/* 디버깅 정보 추가 */}
+            {singleFile && (
+              <div style={{ 
+                background: '#f0f8ff', 
+                border: '1px solid #1976d2', 
+                borderRadius: 8, 
+                padding: 12, 
+                marginBottom: 16,
+                fontSize: 13
+              }}>
+                <div style={{ fontWeight: 600, color: '#1976d2', marginBottom: 4 }}>🔧 Instruction 업로드 정보</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', fontSize: 12 }}>
+                  <div><strong>파일 크기:</strong> {convertBytesToMB(singleFile.size)} MB ({singleFile.size.toLocaleString()} bytes)</div>
+                  <div><strong>업로드 방식:</strong> 단일 파일 업로드</div>
+                  <div><strong>테스트 횟수:</strong> {testCount}회</div>
+                  <div><strong>병렬 처리:</strong> {testCount > 1 ? '동시 실행' : '순차 실행'}</div>
+                </div>
+                
+                {/* 고급 지표 추가 */}
+                {progress > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #e3eafc' }}>
+                    <div style={{ fontWeight: 600, color: '#1976d2', marginBottom: 6 }}>📊 실시간 성능 지표</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '6px', fontSize: 11 }}>
+                      <div>
+                        <strong>처리된 데이터:</strong> {convertBytesToMB((singleFile.size * progress) / 100)} MB
+                      </div>
+                      <div>
+                        <strong>남은 데이터:</strong> {convertBytesToMB((singleFile.size * (100 - progress)) / 100)} MB
+                      </div>
+                      <div>
+                        <strong>완료된 테스트:</strong> {Math.floor((testCount * progress) / 100)} / {testCount}회
+                      </div>
+                      <div>
+                        <strong>예상 속도:</strong> {formatSpeed(currentSpeed)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {/* 전체 평균 프로그레스 */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 14, fontWeight: 500, color: '#666', marginBottom: 4 }}>전체 평균</div>
@@ -1254,6 +1447,48 @@ function App() {
         <div style={{ marginTop: 24 }}>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 16, fontWeight: 600, color: '#1976d2', marginBottom: 8 }}>청크 업로드 진행률</div>
+            
+            {/* 디버깅 정보 추가 */}
+            {chunkFile && (
+              <div style={{ 
+                background: '#f0f8ff', 
+                border: '1px solid #1976d2', 
+                borderRadius: 8, 
+                padding: 12, 
+                marginBottom: 16,
+                fontSize: 13
+              }}>
+                <div style={{ fontWeight: 600, color: '#1976d2', marginBottom: 4 }}>🔧 청크 설정 정보</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', fontSize: 12 }}>
+                  <div><strong>파일 크기:</strong> {convertBytesToMB(chunkFile.size)} MB ({chunkFile.size.toLocaleString()} bytes)</div>
+                  <div><strong>청크 크기:</strong> {chunkSize} MB ({convertMBToBytes(chunkSize).toLocaleString()} bytes)</div>
+                  <div><strong>예상 청크 수:</strong> {Math.ceil(chunkFile.size / convertMBToBytes(chunkSize))}개</div>
+                  <div><strong>병렬 업로드:</strong> {parallelCount}개</div>
+                </div>
+                
+                {/* 고급 지표 추가 */}
+                {chunkProgress > 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #e3eafc' }}>
+                    <div style={{ fontWeight: 600, color: '#1976d2', marginBottom: 6 }}>📊 실시간 성능 지표</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '6px', fontSize: 11 }}>
+                      <div>
+                        <strong>처리된 데이터:</strong> {convertBytesToMB((chunkFile.size * chunkProgress) / 100)} MB
+                      </div>
+                      <div>
+                        <strong>남은 데이터:</strong> {convertBytesToMB((chunkFile.size * (100 - chunkProgress)) / 100)} MB
+                      </div>
+                      <div>
+                        <strong>완료된 청크:</strong> {Math.floor((Math.ceil(chunkFile.size / convertMBToBytes(chunkSize)) * chunkProgress) / 100)} / {Math.ceil(chunkFile.size / convertMBToBytes(chunkSize))}개
+                      </div>
+                      <div>
+                        <strong>예상 속도:</strong> {formatSpeed(chunkCurrentSpeed)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {/* 전체 평균 프로그레스 */}
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 14, fontWeight: 500, color: '#666', marginBottom: 4 }}>전체 평균</div>
