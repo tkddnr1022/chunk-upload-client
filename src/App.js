@@ -47,9 +47,10 @@ function App() {
   // Request ID 발급용 POST body 상태 추가
   const [requestIdBody, setRequestIdBody] = useState({
     language: 'KO',
-    target_language: ['EN', 'JP'],
+    target_language: ['EN'],
     dir_name: '',
-    ext: ''
+    ext: '',
+    file_size: ''
   });
 
   // 커스텀 FormData 필드 상태
@@ -196,7 +197,8 @@ function App() {
       setRequestIdBody(prev => ({
         ...prev,
         dir_name: dirName,
-        ext: ext
+        ext: ext,
+        file_size: file.size.toString()
       }));
     }
   };
@@ -944,7 +946,7 @@ function App() {
             {/* 4행: Request ID Body 입력 필드 (전체 span) */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/7', gridRow: '4/5' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Request ID 발급용 POST Body</span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', width: '100%' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <span style={{ fontSize: 13, marginBottom: 4, fontWeight: 500, color: '#666', height: '16px', lineHeight: '16px' }}>language</span>
                   <input
@@ -961,7 +963,7 @@ function App() {
                     type="text"
                     value={requestIdBody.target_language.join(', ')}
                     onChange={e => handleRequestIdBodyChange('target_language', e.target.value.split(',').map(s => s.trim()))}
-                    placeholder="EN, JP"
+                    placeholder="EN"
                     style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccc', fontSize: 13, boxSizing: 'border-box' }}
                   />
                 </div>
@@ -982,6 +984,17 @@ function App() {
                     type="text"
                     value={requestIdBody.ext}
                     onChange={e => handleRequestIdBodyChange('ext', e.target.value)}
+                    placeholder="파일 선택 시 자동 설정"
+                    style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccc', fontSize: 13, backgroundColor: '#f8f9fa', color: '#666', cursor: 'not-allowed', boxSizing: 'border-box' }}
+                    readOnly={true}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <span style={{ fontSize: 13, marginBottom: 4, fontWeight: 500, color: '#666', height: '16px', lineHeight: '16px' }}>file_size (자동 추출)</span>
+                  <input
+                    type="text"
+                    value={requestIdBody.file_size}
+                    onChange={e => handleRequestIdBodyChange('file_size', e.target.value)}
                     placeholder="파일 선택 시 자동 설정"
                     style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccc', fontSize: 13, backgroundColor: '#f8f9fa', color: '#666', cursor: 'not-allowed', boxSizing: 'border-box' }}
                     readOnly={true}
