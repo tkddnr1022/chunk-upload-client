@@ -42,15 +42,14 @@ function App() {
   const [jwtToken, setJwtToken] = useState('');
 
   // Request ID 발급 Path 상태 추가
-  const [requestIdPath, setRequestIdPath] = useState('');
+  const [requestIdPath, setRequestIdPath] = useState('/v1/translation-re/init');
 
   // Request ID 발급용 POST body 상태 추가
   const [requestIdBody, setRequestIdBody] = useState({
     language: 'KO',
     target_language: ['EN'],
     dir_name: '',
-    ext: '',
-    file_size: ''
+    ext: ''
   });
 
   // 커스텀 FormData 필드 상태
@@ -197,8 +196,7 @@ function App() {
       setRequestIdBody(prev => ({
         ...prev,
         dir_name: dirName,
-        ext: ext,
-        file_size: file.size.toString()
+        ext: ext
       }));
     }
   };
@@ -466,6 +464,134 @@ function App() {
       requestIds = Array(testCount).fill(null);
     }
 
+    // 중단된 경우 업로드 중단
+    if (abortControllerRef.current?.signal.aborted) {
+      setUploading(false);
+      setChunkUploading(false);
+      setBatchRunning(false);
+      setProgress(0);
+      setChunkProgress(0);
+      setTestProgresses(Array(testCount).fill(0));
+      setChunkTestProgresses(Array(testCount).fill(0));
+      const abortMsg = '업로드가 중단되었습니다.';
+      setErrorMessage(abortMsg);
+      setResult(abortMsg);
+      setChunkResult(abortMsg);
+      return;
+    }
+
+    // Preflight 요청 (각 테스트마다 병렬로)
+    if (preflightPath && chunkFile) {
+      const preflightPromises = Array.from({ length: testCount }, async (_, i) => {
+        // 중단 신호 확인
+        if (abortControllerRef.current?.signal.aborted) {
+          return null;
+        }
+
+        const requestId = requestIds[i];
+        if (!requestId) {
+          console.error(`테스트 ${i + 1} Request ID가 없어 preflight 요청을 건너뜁니다.`);
+          return null;
+        }
+
+        try {
+          const response = await fetch(apiOrigin.replace(/\/$/, '') + preflightPath, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...Object.fromEntries(customHeaders.filter(h => h.key && h.key.toLowerCase() !== 'authorization').map(h => [h.key, h.value])),
+              ...(jwtToken && { 'Authorization': 'Bearer ' + jwtToken })
+            },
+            body: JSON.stringify({
+              request_id: requestId,
+              file_size: chunkFile.size
+            }),
+            signal: abortControllerRef.current?.signal,
+          });
+
+          if (response.status === 400) {
+            console.error(`테스트 ${i + 1} Preflight 실패: 가용량 부족`);
+            // Preflight 실패 시 전체 업로드 중단
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            setUploading(false);
+            setChunkUploading(false);
+            setProgress(0);
+            setChunkProgress(0);
+            const errorMsg = '가용량 부족으로 업로드를 중단합니다.';
+            setErrorMessage(errorMsg);
+            setResult(errorMsg);
+            setChunkResult(errorMsg);
+            return null;
+          } else if (response.ok) {
+            console.log(`테스트 ${i + 1} Preflight 성공`);
+            return true;
+          } else {
+            console.error(`테스트 ${i + 1} Preflight 실패:`, response.status);
+            // Preflight 실패 시 전체 업로드 중단
+            if (abortControllerRef.current) {
+              abortControllerRef.current.abort();
+            }
+            setUploading(false);
+            setChunkUploading(false);
+            setProgress(0);
+            setChunkProgress(0);
+            const errorMsg = `Preflight 실패: ${response.status}`;
+            setErrorMessage(errorMsg);
+            setResult(errorMsg);
+            setChunkResult(errorMsg);
+            return null;
+          }
+        } catch (error) {
+          console.error(`테스트 ${i + 1} Preflight 중 오류:`, error);
+          // Preflight 중 오류 시 전체 업로드 중단
+          if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+          }
+          setUploading(false);
+          setChunkUploading(false);
+          setProgress(0);
+          setChunkProgress(0);
+          const errorMsg = 'Preflight 중 오류 발생';
+          setErrorMessage(errorMsg);
+          setResult(errorMsg);
+          setChunkResult(errorMsg);
+          return null;
+        }
+      });
+
+      const preflightResults = await Promise.all(preflightPromises);
+      
+      // Preflight 실패가 있으면 업로드 중단
+      if (preflightResults.some(result => result === null)) {
+        setUploading(false);
+        setChunkUploading(false);
+        setBatchRunning(false);
+        setProgress(0);
+        setChunkProgress(0);
+        setTestProgresses(Array(testCount).fill(0));
+        setChunkTestProgresses(Array(testCount).fill(0));
+        return;
+      }
+    }
+
+    // 중단된 경우 업로드 중단
+    if (abortControllerRef.current?.signal.aborted) {
+      setUploading(false);
+      setChunkUploading(false);
+      setBatchRunning(false);
+      setProgress(0);
+      setChunkProgress(0);
+      setTestProgresses(Array(testCount).fill(0));
+      setChunkTestProgresses(Array(testCount).fill(0));
+      const abortMsg = '업로드가 중단되었습니다.';
+      setErrorMessage(abortMsg);
+      setResult(abortMsg);
+      setChunkResult(abortMsg);
+      return;
+    }
+
     // 단일 업로드 (병렬로)
     let singleTimes = [];
     if (singleFile) {
@@ -722,18 +848,21 @@ function App() {
   };
 
   // path 입력 상태 추가
-  const [singleUploadPath, setSingleUploadPath] = useState('/upload');
-  const [uploadChunkPath, setUploadChunkPath] = useState('/upload-chunk');
-  const [mergeChunksPath, setMergeChunksPath] = useState('/merge-chunks');
+  const [singleUploadPath, setSingleUploadPath] = useState('/v1/translation-re');
+  const [uploadChunkPath, setUploadChunkPath] = useState('/v1/translation-re/chunk');
+  const [mergeChunksPath, setMergeChunksPath] = useState('/v1/translation-re/merge');
+  const [preflightPath, setPreflightPath] = useState('/v1/translation-re/preflight');
 
   // path 입력 필드 localStorage 불러오기
   useEffect(() => {
     const savedSingleUploadPath = localStorage.getItem('uploadTestSingleUploadPath');
     const savedUploadChunkPath = localStorage.getItem('uploadTestUploadChunkPath');
     const savedMergeChunksPath = localStorage.getItem('uploadTestMergeChunksPath');
+    const savedPreflightPath = localStorage.getItem('uploadTestPreflightPath');
     if (savedSingleUploadPath) setSingleUploadPath(savedSingleUploadPath);
     if (savedUploadChunkPath) setUploadChunkPath(savedUploadChunkPath);
     if (savedMergeChunksPath) setMergeChunksPath(savedMergeChunksPath);
+    if (savedPreflightPath) setPreflightPath(savedPreflightPath);
   }, []);
 
   // JWT 토큰 입력 핸들러
@@ -766,6 +895,10 @@ function App() {
     setMergeChunksPath(e.target.value);
     localStorage.setItem('uploadTestMergeChunksPath', e.target.value);
   };
+  const handlePreflightPathChange = (e) => {
+    setPreflightPath(e.target.value);
+    localStorage.setItem('uploadTestPreflightPath', e.target.value);
+  };
 
   const fileInputRef = useRef();
 
@@ -789,7 +922,7 @@ function App() {
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(6, 1fr)',
-            gridTemplateRows: 'repeat(10, auto)',
+            gridTemplateRows: 'repeat(11, auto)',
             gap: '24px',
             alignItems: 'end',
           }}>
@@ -896,20 +1029,20 @@ function App() {
                 청크 단위 업로드 엔드포인트
               </span>
             </div>
-            {/* 3행: JWT 토큰, 청크 병합 Path, Request ID */}
+            {/* 3행: Preflight Path, 청크 병합 Path, Request ID */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '1/3', gridRow: '3/4' }}>
-              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>JWT 토큰 (Bearer)</span>
+              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Preflight Path</span>
               <input
                 type="text"
-                value={jwtToken}
-                onChange={handleJwtTokenChange}
-                placeholder="JWT 토큰 입력"
+                value={preflightPath}
+                onChange={handlePreflightPathChange}
+                placeholder="예: /preflight"
                 style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, transition: 'border 0.2s', outline: 'none', boxSizing: 'border-box' }}
                 onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
                 onBlur={e => e.target.style.border = '1px solid #ccc'}
               />
               <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
-                {jwtToken ? 'Bearer 토큰 설정됨' : '인증 토큰 (선택사항)'}
+                {preflightPath ? 'Preflight 검증 활성화' : '업로드 전 용량 검증 (선택사항)'}
               </span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 120, gridColumn: '3/5', gridRow: '3/4' }}>
@@ -943,10 +1076,26 @@ function App() {
                 {requestIdPath ? 'Request ID 발급 활성화' : '요청 추적 ID (선택사항)'}
               </span>
             </div>
-            {/* 4행: Request ID Body 입력 필드 (전체 span) */}
+            {/* 4행: JWT 토큰 (전체 span) */}
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/7', gridRow: '4/5' }}>
+              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>JWT 토큰 (Bearer)</span>
+              <input
+                type="text"
+                value={jwtToken}
+                onChange={handleJwtTokenChange}
+                placeholder="JWT 토큰 입력"
+                style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, transition: 'border 0.2s', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
+                onBlur={e => e.target.style.border = '1px solid #ccc'}
+              />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {jwtToken ? 'Bearer 토큰 설정됨' : '인증 토큰 (선택사항)'}
+              </span>
+            </div>
+            {/* 5행: Request ID Body 입력 필드 (전체 span) */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/7', gridRow: '5/6' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Request ID 발급용 POST Body</span>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px', width: '100%' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', width: '100%' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                   <span style={{ fontSize: 13, marginBottom: 4, fontWeight: 500, color: '#666', height: '16px', lineHeight: '16px' }}>language</span>
                   <input
@@ -989,26 +1138,15 @@ function App() {
                     readOnly={true}
                   />
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-                  <span style={{ fontSize: 13, marginBottom: 4, fontWeight: 500, color: '#666', height: '16px', lineHeight: '16px' }}>file_size (자동 추출)</span>
-                  <input
-                    type="text"
-                    value={requestIdBody.file_size}
-                    onChange={e => handleRequestIdBodyChange('file_size', e.target.value)}
-                    placeholder="파일 선택 시 자동 설정"
-                    style={{ width: '100%', padding: 8, borderRadius: 6, border: '1px solid #ccc', fontSize: 13, backgroundColor: '#f8f9fa', color: '#666', cursor: 'not-allowed', boxSizing: 'border-box' }}
-                    readOnly={true}
-                  />
-                </div>
               </div>
             </div>
-            {/* 5행: Instruction 업로드 파일 (3 span) */}
+            {/* 6행: Instruction 업로드 파일 (3 span) */}
             <div style={{
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               gridColumn: '1/4',
-              gridRow: '5/6',
+              gridRow: '6/7',
               border: singleFile ? '2px solid #1976d2' : '2px solid #e0e0e0',
               borderRadius: 12,
               padding: '20px',
@@ -1057,13 +1195,13 @@ function App() {
                 </div>
               </div>
             </div>
-            {/* 5행: 청크 업로드 파일 (3 span) */}
+            {/* 6행: 청크 업로드 파일 (3 span) */}
             <div style={{
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               gridColumn: '4/7',
-              gridRow: '5/6',
+              gridRow: '6/7',
               border: chunkFile ? '2px solid #1976d2' : '2px solid #e0e0e0',
               borderRadius: 12,
               padding: '20px',
@@ -1111,8 +1249,8 @@ function App() {
                 </div>
               </div>
             </div>
-            {/* 6행: 커스텀 FormData 필드 (3 span) */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/4', gridRow: '6/7' }}>
+            {/* 7행: 커스텀 FormData 필드 (3 span) */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/4', gridRow: '7/8' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>커스텀 FormData 필드 (옵션)</span>
               <div style={{ width: '100%' }}>
                 {customFields.map((f, idx) => (
@@ -1153,8 +1291,8 @@ function App() {
                 ))}
               </div>
             </div>
-            {/* 6행: 커스텀 헤더 (3 span) */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '4/7', gridRow: '6/7' }}>
+            {/* 7행: 커스텀 헤더 (3 span) */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '4/7', gridRow: '7/8' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>커스텀 헤더 (옵션)</span>
               <div style={{ width: '100%' }}>
                 {customHeaders.map((h, idx) => (
@@ -1195,8 +1333,8 @@ function App() {
                 ))}
               </div>
             </div>
-            {/* 7행: 버튼들 */}
-            <div style={{ gridColumn: '1/3', gridRow: '7/8', display: 'flex', alignItems: 'end' }}>
+            {/* 8행: 버튼들 */}
+            <div style={{ gridColumn: '1/3', gridRow: '8/9', display: 'flex', alignItems: 'end' }}>
               <button
                 onClick={handleBatchTest}
                 disabled={batchRunning || !singleFile || !chunkFile || !apiOrigin}
@@ -1236,7 +1374,7 @@ function App() {
                 {batchRunning ? '측정 중...' : '측정 시작'}
               </button>
             </div>
-            <div style={{ gridColumn: '3/5', gridRow: '7/8', display: 'flex', alignItems: 'end' }}>
+            <div style={{ gridColumn: '3/5', gridRow: '8/9', display: 'flex', alignItems: 'end' }}>
               <button
                 onClick={handleAbortUpload}
                 disabled={!batchRunning}
@@ -1261,7 +1399,7 @@ function App() {
                 측정 중지
               </button>
             </div>
-            <div style={{ gridColumn: '5/7', gridRow: '7/8', display: 'flex', alignItems: 'end' }}>
+            <div style={{ gridColumn: '5/7', gridRow: '8/9', display: 'flex', alignItems: 'end' }}>
               <button
                 onClick={handleClearHistory}
                 style={{
