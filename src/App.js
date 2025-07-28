@@ -43,6 +43,18 @@ function App() {
 
   // Request ID 발급 Path 상태 추가
   const [requestIdPath, setRequestIdPath] = useState('/v1/translation-re/init');
+  
+  // Request ID 수동 입력 상태 추가
+  const [manualRequestId, setManualRequestId] = useState('');
+  
+  // Request ID 상세 조회 Path 상태 추가
+  const [requestDetailPath, setRequestDetailPath] = useState('/v1/translation-re/detail');
+  
+  // Instruction 업로드 활성화 상태 추가
+  const [instructionEnabled, setInstructionEnabled] = useState(true);
+  
+  // 청크 업로드 활성화 상태 추가
+  const [chunkUploadEnabled, setChunkUploadEnabled] = useState(true);
 
   // Request ID 발급용 POST body 상태 추가
   const [requestIdBody, setRequestIdBody] = useState({
@@ -115,6 +127,10 @@ function App() {
     const savedRequestIdBody = localStorage.getItem('uploadTestRequestIdBody');
     const savedCustomFields = localStorage.getItem('uploadTestCustomFields');
     const savedCustomHeaders = localStorage.getItem('uploadTestCustomHeaders');
+    const savedManualRequestId = localStorage.getItem('uploadTestManualRequestId');
+    const savedRequestDetailPath = localStorage.getItem('uploadTestRequestDetailPath');
+    const savedInstructionEnabled = localStorage.getItem('uploadTestInstructionEnabled');
+    const savedChunkUploadEnabled = localStorage.getItem('uploadTestChunkUploadEnabled');
     if (savedOrigin) setApiOrigin(savedOrigin);
     if (savedCount) setTestCount(Number(savedCount));
     if (savedChunk) setChunkSize(Number(savedChunk));
@@ -130,6 +146,10 @@ function App() {
     if (savedCustomHeaders) {
       try { setCustomHeaders(JSON.parse(savedCustomHeaders)); } catch { }
     }
+    if (savedManualRequestId) setManualRequestId(savedManualRequestId);
+    if (savedRequestDetailPath) setRequestDetailPath(savedRequestDetailPath);
+    if (savedInstructionEnabled !== null) setInstructionEnabled(savedInstructionEnabled === 'true');
+    if (savedChunkUploadEnabled !== null) setChunkUploadEnabled(savedChunkUploadEnabled === 'true');
   }, []);
 
   // customFields, customHeaders 변경 시 localStorage에 저장
@@ -144,6 +164,20 @@ function App() {
   useEffect(() => {
     localStorage.setItem('uploadTestRequestIdBody', JSON.stringify(requestIdBody));
   }, [requestIdBody]);
+
+  // manualRequestId, requestDetailPath, instructionEnabled 변경 시 localStorage에 저장
+  useEffect(() => {
+    localStorage.setItem('uploadTestManualRequestId', manualRequestId);
+  }, [manualRequestId]);
+  useEffect(() => {
+    localStorage.setItem('uploadTestRequestDetailPath', requestDetailPath);
+  }, [requestDetailPath]);
+  useEffect(() => {
+    localStorage.setItem('uploadTestInstructionEnabled', instructionEnabled.toString());
+  }, [instructionEnabled]);
+  useEffect(() => {
+    localStorage.setItem('uploadTestChunkUploadEnabled', chunkUploadEnabled.toString());
+  }, [chunkUploadEnabled]);
 
   // 기록 불러오기
   useEffect(() => {
@@ -240,7 +274,7 @@ function App() {
   };
 
   // 병렬 청크 업로드 함수
-  async function parallelChunkUpload({ file, chunkSizeInBytes, fileId, totalChunks, uploadChunkUrl, setChunkProgress, parallelCount, abortController, getHeadersWithRequestId, requestId, testIndex }) {
+  async function parallelChunkUpload({ file, chunkSizeInBytes, fileId, totalChunks, uploadChunkUrl, setChunkProgress, parallelCount, abortController, getHeadersWithRequestId, requestId, testIndex, startChunkIndex = 0 }) {
     let uploadedChunks = 0;
     let chunkStart = 0, chunkEnd = 0;
     const chunkStatus = Array(totalChunks).fill(false);
@@ -249,7 +283,7 @@ function App() {
     let errorMessage = '';
 
     // 디버깅: 청크 크기 정보 출력
-    console.log(`[DEBUG] 청크 업로드 시작 - 파일 크기: ${file.size} bytes, 청크 크기: ${chunkSizeInBytes} bytes, 총 청크 수: ${totalChunks}`);
+    console.log(`[DEBUG] 청크 업로드 시작 - 파일 크기: ${file.size} bytes, 청크 크기: ${chunkSizeInBytes} bytes, 총 청크 수: ${totalChunks}, 시작 청크 인덱스: ${startChunkIndex}`);
 
     const uploadOne = async (i) => {
       if (aborted) return;
@@ -264,7 +298,7 @@ function App() {
       customFields.forEach(f => { if (f.key) formData.append(f.key, f.value); });
       // 파일만 기본 필드로 추가
       formData.append('file', chunk);
-      if (i === 0) chunkStart = performance.now();
+      if (i === startChunkIndex) chunkStart = performance.now();
       try {
         const res = await fetch(uploadChunkUrl, {
           method: 'POST',
@@ -285,7 +319,7 @@ function App() {
         if (i === totalChunks - 1) chunkEnd = performance.now();
         chunkStatus[i] = true;
         uploadedChunks++;
-        const chunkPercent = Math.round((uploadedChunks / totalChunks) * 100);
+        const chunkPercent = Math.round((uploadedChunks / (totalChunks - startChunkIndex)) * 100);
         setChunkTestProgresses(prev => {
           const newProgresses = [...prev];
           newProgresses[testIndex] = chunkPercent;
@@ -325,8 +359,8 @@ function App() {
       }
     };
     // 병렬 업로드 컨트롤
-    let next = 0;
-    const runners = Array(Math.min(parallelCount, totalChunks)).fill(0).map(async () => {
+    let next = startChunkIndex;
+    const runners = Array(Math.min(parallelCount, totalChunks - startChunkIndex)).fill(0).map(async () => {
       while (!aborted && next < totalChunks) {
         // 전역 AbortController 신호 확인
         if (abortController?.signal.aborted) {
@@ -375,11 +409,11 @@ function App() {
     setChunkTestProgresses(Array(testCount).fill(0));
 
     // 파일 선택 여부에 따라 업로드 상태 설정
-    if (singleFile) {
+    if (singleFile && instructionEnabled) {
       setUploading(true);
       setUploadStartTime(Date.now());
     }
-    if (chunkFile) {
+    if (chunkFile && chunkUploadEnabled) {
       setChunkUploading(true);
       setChunkUploadStartTime(Date.now());
     }
@@ -399,9 +433,16 @@ function App() {
       return headerObj;
     };
 
-    // Request ID 발급 (각 테스트마다 병렬로)
+    // Request ID 처리 (수동 입력 또는 발급)
     let requestIds = [];
-    if (requestIdPath) {
+    let chunkStartIdx = null;
+    
+    if (manualRequestId) {
+      // 수동 입력된 Request ID 사용
+      requestIds = Array(testCount).fill(manualRequestId);
+      console.log('수동 입력된 Request ID 사용:', manualRequestId);
+    } else if (requestIdPath) {
+      // Request ID 발급 (각 테스트마다 병렬로)
       const requestIdPromises = Array.from({ length: testCount }, async (_, i) => {
         // 중단 신호 확인
         if (abortControllerRef.current?.signal.aborted) {
@@ -481,7 +522,7 @@ function App() {
     }
 
     // Preflight 요청 (각 테스트마다 병렬로)
-    if (preflightPath && chunkFile) {
+    if (preflightPath && chunkFile && chunkUploadEnabled) {
       const preflightPromises = Array.from({ length: testCount }, async (_, i) => {
         // 중단 신호 확인
         if (abortControllerRef.current?.signal.aborted) {
@@ -576,6 +617,41 @@ function App() {
       }
     }
 
+    // 수동 Request ID가 있는 경우 파일 상세 조회
+    if (manualRequestId && requestDetailPath) {
+      try {
+        const response = await fetch(apiOrigin.replace(/\/$/, '') + requestDetailPath + `?request_id=${manualRequestId}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...Object.fromEntries(customHeaders.filter(h => h.key && h.key.toLowerCase() !== 'authorization').map(h => [h.key, h.value])),
+            ...(jwtToken && { 'Authorization': 'Bearer ' + jwtToken })
+          },
+          signal: abortControllerRef.current?.signal,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          chunkStartIdx = data.data?.chunk_start_idx || 0;
+          console.log('파일 상세 조회 성공, chunk_start_idx:', chunkStartIdx);
+        } else {
+          console.error('파일 상세 조회 실패:', response.status);
+          const errorMsg = `파일 상세 조회 실패: ${response.status}`;
+          setErrorMessage(errorMsg);
+          setResult(errorMsg);
+          setChunkResult(errorMsg);
+          return;
+        }
+      } catch (error) {
+        console.error('파일 상세 조회 중 오류:', error);
+        const errorMsg = '파일 상세 조회 중 오류 발생';
+        setErrorMessage(errorMsg);
+        setResult(errorMsg);
+        setChunkResult(errorMsg);
+        return;
+      }
+    }
+
     // 중단된 경우 업로드 중단
     if (abortControllerRef.current?.signal.aborted) {
       setUploading(false);
@@ -592,9 +668,9 @@ function App() {
       return;
     }
 
-    // 단일 업로드 (병렬로)
+    // 단일 업로드 (병렬로) - Instruction 업로드가 활성화된 경우에만
     let singleTimes = [];
-    if (singleFile) {
+    if (singleFile && instructionEnabled) {
       const singleUploadPromises = Array.from({ length: testCount }, async (_, i) => {
         // 중단 신호 확인
         if (abortControllerRef.current?.signal.aborted) {
@@ -716,7 +792,7 @@ function App() {
 
     // 청크 업로드 (병렬로)
     let chunkTimes = [];
-    if (chunkFile) {
+    if (chunkFile && chunkUploadEnabled) {
       const chunkUploadPromises = Array.from({ length: testCount }, async (_, t) => {
         // 중단 신호 확인
         if (abortControllerRef.current?.signal.aborted) {
@@ -732,8 +808,11 @@ function App() {
         const uploadChunkUrl = apiOrigin.replace(/\/$/, '') + uploadChunkPath;
         const mergeChunksUrl = apiOrigin.replace(/\/$/, '') + mergeChunksPath;
 
+        // Resume 모드인 경우 chunk_start_idx부터 시작
+        const startChunkIndex = chunkStartIdx !== null ? chunkStartIdx : 0;
+
         // 디버깅: 청크 설정 정보 출력
-        console.log(`[DEBUG] 테스트 ${t + 1} - 설정된 청크 크기: ${chunkSize} MB (${chunkSizeInBytes.toLocaleString()} bytes), 파일 크기: ${chunkFile.size.toLocaleString()} bytes, 예상 청크 수: ${totalChunks}`);
+        console.log(`[DEBUG] 테스트 ${t + 1} - 설정된 청크 크기: ${chunkSize} MB (${chunkSizeInBytes.toLocaleString()} bytes), 파일 크기: ${chunkFile.size.toLocaleString()} bytes, 예상 청크 수: ${totalChunks}, 시작 청크 인덱스: ${startChunkIndex}`);
 
         // 병렬 업로드 실행
         let mergeOk = false;
@@ -748,7 +827,8 @@ function App() {
           abortController: abortControllerRef.current,
           getHeadersWithRequestId,
           requestId,
-          testIndex: t
+          testIndex: t,
+          startChunkIndex: startChunkIndex
         });
 
         // 청크 업로드가 모두 성공했을 때만 병합 요청
@@ -898,6 +978,30 @@ function App() {
   const handlePreflightPathChange = (e) => {
     setPreflightPath(e.target.value);
     localStorage.setItem('uploadTestPreflightPath', e.target.value);
+  };
+
+  // Request ID 수동 입력 핸들러
+  const handleManualRequestIdChange = (e) => {
+    setManualRequestId(e.target.value);
+    localStorage.setItem('uploadTestManualRequestId', e.target.value);
+  };
+
+  // Request ID 상세 조회 Path 입력 핸들러
+  const handleRequestDetailPathChange = (e) => {
+    setRequestDetailPath(e.target.value);
+    localStorage.setItem('uploadTestRequestDetailPath', e.target.value);
+  };
+
+  // Instruction 업로드 활성화 핸들러
+  const handleInstructionEnabledChange = (e) => {
+    setInstructionEnabled(e.target.checked);
+    localStorage.setItem('uploadTestInstructionEnabled', e.target.checked.toString());
+  };
+
+  // 청크 업로드 활성화 핸들러
+  const handleChunkUploadEnabledChange = (e) => {
+    setChunkUploadEnabled(e.target.checked);
+    localStorage.setItem('uploadTestChunkUploadEnabled', e.target.checked.toString());
   };
 
   const fileInputRef = useRef();
@@ -1076,8 +1180,8 @@ function App() {
                 {requestIdPath ? 'Request ID 발급 활성화' : '요청 추적 ID (선택사항)'}
               </span>
             </div>
-            {/* 4행: JWT 토큰 (전체 span) */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gridColumn: '1/7', gridRow: '4/5' }}>
+            {/* 4행: JWT 토큰, Request ID 수동 입력, Request ID 상세 조회 Path */}
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '1/3', gridRow: '4/5' }}>
               <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>JWT 토큰 (Bearer)</span>
               <input
                 type="text"
@@ -1090,6 +1194,36 @@ function App() {
               />
               <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
                 {jwtToken ? 'Bearer 토큰 설정됨' : '인증 토큰 (선택사항)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '3/5', gridRow: '4/5' }}>
+              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Request ID 수동 입력</span>
+              <input
+                type="text"
+                value={manualRequestId}
+                onChange={handleManualRequestIdChange}
+                placeholder="Resume용 Request ID 입력"
+                style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, transition: 'border 0.2s', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
+                onBlur={e => e.target.style.border = '1px solid #ccc'}
+              />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {manualRequestId ? 'Resume 모드 활성화' : '기존 업로드 재개 (선택사항)'}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', minWidth: 180, gridColumn: '5/7', gridRow: '4/5' }}>
+              <span style={{ fontSize: 15, marginBottom: 6, fontWeight: 500, color: '#333' }}>Request ID 상세 조회 Path</span>
+              <input
+                type="text"
+                value={requestDetailPath}
+                onChange={handleRequestDetailPathChange}
+                placeholder="예: /v1/translation-re/detail"
+                style={{ width: '100%', padding: 12, borderRadius: 8, border: '1px solid #ccc', fontSize: 14, transition: 'border 0.2s', outline: 'none', boxSizing: 'border-box' }}
+                onFocus={e => e.target.style.border = '1.5px solid #1976d2'}
+                onBlur={e => e.target.style.border = '1px solid #ccc'}
+              />
+              <span style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {requestDetailPath ? '상세 조회 활성화' : 'Resume용 상세 정보 조회'}
               </span>
             </div>
             {/* 5행: Request ID Body 입력 필드 (전체 span) */}
@@ -1147,14 +1281,33 @@ function App() {
               alignItems: 'center',
               gridColumn: '1/4',
               gridRow: '6/7',
-              border: singleFile ? '2px solid #1976d2' : '2px solid #e0e0e0',
+              border: singleFile && instructionEnabled ? '2px solid #1976d2' : '2px solid #e0e0e0',
               borderRadius: 12,
               padding: '20px',
-              backgroundColor: singleFile ? '#f0f8ff' : '#fafafa',
+              backgroundColor: singleFile && instructionEnabled ? '#f0f8ff' : instructionEnabled ? '#fafafa' : '#f5f5f5',
               minHeight: 120,
-              transition: 'border-color 0.2s, background-color 0.2s'
+              transition: 'border-color 0.2s, background-color 0.2s',
+              opacity: instructionEnabled ? 1 : 0.6
             }}>
-              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: singleFile ? '#1976d2' : '#333', textAlign: 'center' }}>Instruction 업로드 파일</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ 
+                  fontSize: 15, 
+                  fontWeight: 500, 
+                  color: singleFile && instructionEnabled ? '#1976d2' : instructionEnabled ? '#333' : '#999', 
+                  textAlign: 'center' 
+                }}>
+                  Instruction 업로드 파일
+                </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={instructionEnabled}
+                    onChange={handleInstructionEnabledChange}
+                    style={{ width: 16, height: 16, cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 12, color: instructionEnabled ? '#666' : '#999' }}>활성화</span>
+                </label>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%' }}>
                 <input
                   ref={fileInputRef}
@@ -1162,19 +1315,21 @@ function App() {
                   onChange={handleSingleFileChange}
                   style={{ display: 'none' }}
                   required
+                  disabled={!instructionEnabled}
                 />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                  disabled={!instructionEnabled}
                   style={{
                     padding: '12px 24px',
                     borderRadius: 8,
-                    background: singleFile ? '#388e3c' : '#1976d2',
+                    background: !instructionEnabled ? '#ccc' : singleFile ? '#388e3c' : '#1976d2',
                     color: '#fff',
                     border: 'none',
                     fontWeight: 600,
                     fontSize: 14,
-                    cursor: 'pointer',
+                    cursor: instructionEnabled ? 'pointer' : 'not-allowed',
                     boxShadow: '0 1px 4px 0 rgba(25,118,210,0.07)',
                     display: 'flex',
                     alignItems: 'center',
@@ -1182,17 +1337,26 @@ function App() {
                     transition: 'background 0.2s',
                     flexShrink: 0,
                   }}
-                  onMouseOver={e => e.target.style.background = singleFile ? '#2e7d32' : '#1565c0'}
-                  onMouseOut={e => e.target.style.background = singleFile ? '#388e3c' : '#1976d2'}
+                  onMouseOver={e => {
+                    if (instructionEnabled) {
+                      e.target.style.background = singleFile ? '#2e7d32' : '#1565c0';
+                    }
+                  }}
+                  onMouseOut={e => {
+                    if (instructionEnabled) {
+                      e.target.style.background = singleFile ? '#388e3c' : '#1976d2';
+                    }
+                  }}
                 >
                   <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path fill="#fff" d="M16.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" /><path stroke="#fff" strokeWidth="1.5" d="M12 16.5V19m-7 1.5h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1.28a2 2 0 0 1-1.42-.59l-2.43-2.43a2 2 0 0 0-1.42-.58h-2.72a2 2 0 0 0-1.42.58l-2.43 2.43A2 2 0 0 1 4.28 9H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2Z" /></svg>
                   {singleFile ? '파일 변경' : '파일 선택'}
                 </button>
                 <div style={{ minHeight: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {singleFile && (
+                  {singleFile && instructionEnabled && (
                     <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{singleFile.name}</span>
                   )}
                 </div>
+
               </div>
             </div>
             {/* 6행: 청크 업로드 파일 (3 span) */}
@@ -1202,33 +1366,54 @@ function App() {
               alignItems: 'center',
               gridColumn: '4/7',
               gridRow: '6/7',
-              border: chunkFile ? '2px solid #1976d2' : '2px solid #e0e0e0',
+              border: chunkFile && chunkUploadEnabled ? '2px solid #1976d2' : '2px solid #e0e0e0',
               borderRadius: 12,
               padding: '20px',
-              backgroundColor: chunkFile ? '#f0f8ff' : '#fafafa',
+              backgroundColor: chunkFile && chunkUploadEnabled ? '#f0f8ff' : chunkUploadEnabled ? '#fafafa' : '#f5f5f5',
               minHeight: 120,
-              transition: 'border-color 0.2s, background-color 0.2s'
+              transition: 'border-color 0.2s, background-color 0.2s',
+              opacity: chunkUploadEnabled ? 1 : 0.6
             }}>
-              <span style={{ fontSize: 15, marginBottom: 16, fontWeight: 500, color: chunkFile ? '#1976d2' : '#333', textAlign: 'center' }}>청크 업로드 파일</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ 
+                  fontSize: 15, 
+                  fontWeight: 500, 
+                  color: chunkFile && chunkUploadEnabled ? '#1976d2' : chunkUploadEnabled ? '#333' : '#999', 
+                  textAlign: 'center' 
+                }}>
+                  청크 업로드 파일
+                </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={chunkUploadEnabled}
+                    onChange={handleChunkUploadEnabledChange}
+                    style={{ width: 16, height: 16, cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 12, color: chunkUploadEnabled ? '#666' : '#999' }}>활성화</span>
+                </label>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, width: '100%' }}>
                 <input
                   type="file"
                   onChange={handleChunkFileChange}
                   style={{ display: 'none' }}
                   id="chunkFileInput"
+                  disabled={!chunkUploadEnabled}
                 />
                 <button
                   type="button"
                   onClick={() => document.getElementById('chunkFileInput').click()}
+                  disabled={!chunkUploadEnabled}
                   style={{
                     padding: '12px 24px',
                     borderRadius: 8,
-                    background: chunkFile ? '#388e3c' : '#1976d2',
+                    background: !chunkUploadEnabled ? '#ccc' : chunkFile ? '#388e3c' : '#1976d2',
                     color: '#fff',
                     border: 'none',
                     fontWeight: 600,
                     fontSize: 14,
-                    cursor: 'pointer',
+                    cursor: chunkUploadEnabled ? 'pointer' : 'not-allowed',
                     boxShadow: '0 1px 4px 0 rgba(25,118,210,0.07)',
                     display: 'flex',
                     alignItems: 'center',
@@ -1236,17 +1421,26 @@ function App() {
                     transition: 'background 0.2s',
                     flexShrink: 0,
                   }}
-                  onMouseOver={e => e.target.style.background = chunkFile ? '#2e7d32' : '#1565c0'}
-                  onMouseOut={e => e.target.style.background = chunkFile ? '#388e3c' : '#1976d2'}
+                  onMouseOver={e => {
+                    if (chunkUploadEnabled) {
+                      e.target.style.background = chunkFile ? '#2e7d32' : '#1565c0';
+                    }
+                  }}
+                  onMouseOut={e => {
+                    if (chunkUploadEnabled) {
+                      e.target.style.background = chunkFile ? '#388e3c' : '#1976d2';
+                    }
+                  }}
                 >
                   <svg width="16" height="16" fill="none" viewBox="0 0 24 24"><path fill="#fff" d="M16.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" /><path stroke="#fff" strokeWidth="1.5" d="M12 16.5V19m-7 1.5h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1.28a2 2 0 0 1-1.42-.59l-2.43-2.43a2 2 0 0 0-1.42-.58h-2.72a2 2 0 0 0-1.42.58l-2.43 2.43A2 2 0 0 1 4.28 9H3a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2Z" /></svg>
                   {chunkFile ? '파일 변경' : '파일 선택'}
                 </button>
                 <div style={{ minHeight: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  {chunkFile && (
+                  {chunkFile && chunkUploadEnabled && (
                     <span style={{ fontSize: 13, color: '#1976d2', fontWeight: 500, wordBreak: 'break-all', textAlign: 'center', maxWidth: '100%' }}>{chunkFile.name}</span>
                   )}
                 </div>
+
               </div>
             </div>
             {/* 7행: 커스텀 FormData 필드 (3 span) */}
@@ -1337,38 +1531,39 @@ function App() {
             <div style={{ gridColumn: '1/3', gridRow: '8/9', display: 'flex', alignItems: 'end' }}>
               <button
                 onClick={handleBatchTest}
-                disabled={batchRunning || !singleFile || !chunkFile || !apiOrigin}
+                disabled={batchRunning || (!singleFile && instructionEnabled) || (!chunkFile && chunkUploadEnabled) || !apiOrigin || (!instructionEnabled && !chunkUploadEnabled)}
                 style={{
                   padding: '14px 24px',
                   fontWeight: 600,
                   fontSize: 15,
                   borderRadius: 8,
-                  background: batchRunning ? '#bdbdbd' : !singleFile || !chunkFile || !apiOrigin ? '#e0e0e0' : '#1976d2',
+                  background: batchRunning ? '#bdbdbd' : (!singleFile && instructionEnabled) || (!chunkFile && chunkUploadEnabled) || !apiOrigin ? '#e0e0e0' : '#1976d2',
                   color: '#fff',
                   border: 'none',
-                  boxShadow: batchRunning || !singleFile || !chunkFile || !apiOrigin ? 'none' : '0 2px 8px 0 rgba(25,118,210,0.08)',
-                  cursor: batchRunning || !singleFile || !chunkFile || !apiOrigin ? 'not-allowed' : 'pointer',
+                  boxShadow: batchRunning || (!singleFile && instructionEnabled) || (!chunkFile && chunkUploadEnabled) || !apiOrigin ? 'none' : '0 2px 8px 0 rgba(25,118,210,0.08)',
+                  cursor: batchRunning || (!singleFile && instructionEnabled) || (!chunkFile && chunkUploadEnabled) || !apiOrigin ? 'not-allowed' : 'pointer',
                   transition: 'background 0.2s, box-shadow 0.2s',
                   width: '100%',
                   minWidth: 120,
                   marginLeft: 0,
                 }}
                 onMouseOver={e => {
-                  if (!batchRunning && singleFile && chunkFile && apiOrigin) {
+                  if (!batchRunning && (singleFile || !instructionEnabled) && (chunkFile || !chunkUploadEnabled) && apiOrigin) {
                     e.target.style.background = '#1565c0';
                   }
                 }}
                 onMouseOut={e => {
-                  if (!batchRunning && singleFile && chunkFile && apiOrigin) {
+                  if (!batchRunning && (singleFile || !instructionEnabled) && (chunkFile || !chunkUploadEnabled) && apiOrigin) {
                     e.target.style.background = '#1976d2';
                   }
                 }}
                 title={
                   !apiOrigin ? 'API 서버 Origin을 입력해주세요.' :
-                    !singleFile ? 'Instruction 업로드 파일을 선택해주세요.' :
-                      !chunkFile ? '청크 업로드 파일을 선택해주세요.' :
-                        batchRunning ? '측정이 진행 중입니다.' :
-                          '측정을 시작합니다.'
+                    (!instructionEnabled && !chunkUploadEnabled) ? '최소 하나의 업로드 타입을 활성화해주세요.' :
+                      (!singleFile && instructionEnabled) ? 'Instruction 업로드 파일을 선택해주세요.' :
+                        (!chunkFile && chunkUploadEnabled) ? '청크 업로드 파일을 선택해주세요.' :
+                          batchRunning ? '측정이 진행 중입니다.' :
+                            '측정을 시작합니다.'
                 }
               >
                 {batchRunning ? '측정 중...' : '측정 시작'}
